@@ -1,0 +1,8 @@
+/**:
+  ros__parameters:
+    cmd_vel_topic: /cmd_vel
+    safety_topic: /safety_state
+    motion_topic: /motion_command
+    publish_rate_hz: 10.0
+    default_body_height: 0.24
+    stale_cmd_timeout_sec: 1.0

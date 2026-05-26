@@ -1,0 +1,4 @@
+interface:
+  display_name: "GO2 Nav2 Humble"
+  short_description: "Indoor GO2 navigation with Humble, Nav2, SLAM, and localization"
+  default_prompt: "Use $go2-nav2-humble-skill to design or tune indoor navigation for GO2 EDU on ROS 2 Humble."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "GO2 Field Autonomy"
+  short_description: "Outdoor GO2 autonomy, waypoint routing, and terrain checks"
+  default_prompt: "Use $go2-field-autonomy-skill to plan or debug outdoor GO2 waypoint autonomy and terrain-aware navigation."

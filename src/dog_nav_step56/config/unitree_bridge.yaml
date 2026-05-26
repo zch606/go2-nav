@@ -1,0 +1,19 @@
+/**:
+  ros__parameters:
+    # 话题配置
+    motion_command_topic: /motion_command
+    sport_request_topic: /api/sport/request
+    sport_state_topic: /lf/sportmodestate
+
+    # 控制频率
+    publish_rate_hz: 10.0
+
+    # 传感器超时 (秒)
+    sensor_timeout_sec: 1.5
+
+    # 速度档位映射 (SpeedLimit → SpeedLevel)
+    # speed_limit <= 0.20 → level 1
+    # speed_limit <= 0.35 → level 2
+    # speed_limit <= 0.60 → level 3
+    # speed_limit > 0.60  → level 4
+    speed_level_thresholds: [0.20, 0.35, 0.60]
