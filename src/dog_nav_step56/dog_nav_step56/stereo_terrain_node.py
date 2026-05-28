@@ -160,7 +160,7 @@ class StereoTerrainNode(Node):
             _, terrain_cost = grid_to_slope(grid, self._grid_res)
 
             # 5. 发布高程栅格 (sensor_msgs/Image, 32FC1)
-            grid_valid = np.where(np.isnan(grid), -1.0, grid)
+            grid_valid = np.where(np.isfinite(grid), grid, -1.0)
             terrain_msg = self._bridge.cv2_to_imgmsg(
                 grid_valid.astype(np.float32), encoding='32FC1',
             )

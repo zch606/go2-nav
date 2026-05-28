@@ -38,7 +38,12 @@ def camera_to_ground(xc: np.ndarray, yc: np.ndarray, zc: np.ndarray,
     相机坐标系 → 地面鸟瞰坐标系。
 
     相机原点在机器人正前方，光轴下倾 cam_pitch 弧度。
-    地面坐标系: Xg=前方, Yg=左方(鸟瞰), Zg=向上(高程)
+    地面坐标系: Xg=左右, Yg=前方, Zg=高程
+
+    R_c2w = [[1, 0,      0    ],
+             [0, -sinθ,  cosθ ],
+             [0, -cosθ,  -sinθ]]
+    P_world = R_c2w * Pc + [0, 0, cam_height]
 
     Args:
         xc, yc, zc:  相机坐标系 3D 点 (m)
@@ -46,13 +51,13 @@ def camera_to_ground(xc: np.ndarray, yc: np.ndarray, zc: np.ndarray,
         cam_pitch:    相机俯仰角 (rad), 正=下倾
 
     Returns:
-        xg, yg, zg: 地面坐标系 3D 点 (m)
+        xg, yg, zg: 地面坐标系 (左右, 前方, 高程) (m)
     """
     cos_t, sin_t = math.cos(cam_pitch), math.sin(cam_pitch)
 
-    xg = xc                                      # 前方不变
-    yg = zc * cos_t - yc * sin_t                 # 深度→鸟瞰距离
-    zg = cam_height - zc * sin_t - yc * cos_t    # 高程 (0=地面)
+    xg = xc
+    yg = -sin_t * yc + cos_t * zc                # 前方距离
+    zg = cam_height - cos_t * yc - sin_t * zc    # 高程 (0=地面)
 
     return xg, yg, zg
 
@@ -95,7 +100,7 @@ def points_to_grid(xg: np.ndarray, yg: np.ndarray, zg: np.ndarray,
         (zg > z_min) & (zg < z_max)
     )
 
-    grid = np.full((grid_h, grid_w), np.nan, dtype=np.float32)
+    grid = np.full((grid_h, grid_w), -np.inf, dtype=np.float32)
 
     if not valid.any():
         return grid
@@ -123,21 +128,26 @@ def grid_to_slope(grid: np.ndarray, resolution: float) -> tuple[np.ndarray, floa
     高程栅格 → 坡度图 + 平均成本。
 
     Args:
-        grid:      高程栅格 (H×W), NaN 为无效
+        grid:      高程栅格 (H×W), -inf 为无效
         resolution: 栅格分辨率 (m/格)
 
     Returns:
-        slope_grid: 坡度图 (H×W, 弧度), NaN 为无效
-        mean_cost:  平均地形成本 (0~255), 仿 terrain_cost
+        slope_grid: 坡度图 (H×W, 弧度)
+        mean_cost:  平均地形成本 (0~255)
     """
-    if np.all(np.isnan(grid)):
-        return np.full_like(grid, np.nan), 20.0
+    valid_mask = np.isfinite(grid)
+    if not valid_mask.any():
+        return np.zeros_like(grid), 20.0
 
-    dy, dx = np.gradient(grid)
+    filled = np.where(valid_mask, grid, 0.0)
+    dy, dx = np.gradient(filled)
     dy /= resolution
     dx /= resolution
     slope = np.arctan(np.sqrt(dy ** 2 + dx ** 2))
 
-    mean_cost = float(np.tanh(np.nanmean(slope) * 20) * 150 + 20)
+    valid_slope = slope[valid_mask]
+    if len(valid_slope) == 0:
+        return slope, 20.0
 
+    mean_cost = float(np.tanh(np.nanmean(valid_slope) * 20) * 150 + 20)
     return slope, mean_cost
