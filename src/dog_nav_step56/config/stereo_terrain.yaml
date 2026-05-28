@@ -1,0 +1,40 @@
+# ============================================================
+# D435i → 2.5D 局部地形图 — 参数配置文件
+# ============================================================
+#
+# 修改后无需重新编译，重启节点即可生效。
+# 调整建议：真机跑起来后用 ros2 topic echo /terrain_cost 看输出，
+# 根据地形反馈微调 z_min/z_max 和 depth_max。
+#
+# ============================================================
+
+stereo_terrain_node:
+  ros__parameters:
+
+    # ---- 话题 ----
+    depth_topic: "/camera/depth/image_rect_raw"
+    camera_info_topic: "/camera/depth/camera_info"
+    terrain_topic: "/local_terrain"
+    cost_topic: "/terrain_cost"
+
+    # ---- 栅格参数 ----
+    grid_resolution: 0.05       # m/格 (每个格子 5cm)
+    grid_length_m: 4.0          # 前方覆盖 4m
+    grid_width_m: 3.0           # 左右覆盖 3m (±1.5m)
+
+    # ---- 相机安装位姿 ----
+    # 如果 Go2 实测发现偏差，改这两个值：
+    cam_height: 0.35            # 相机离地高度 (m)
+    cam_pitch_deg: 10.0         # 俯仰角 (°) — 正=下倾
+
+    # ---- 深度过滤 ----
+    depth_min: 0.3              # 最小有效深度 (m, <0.3 可能拍到 Go2 腿)
+    depth_max: 6.0              # 最大有效深度 (m, >6m 深度噪声大)
+
+    # ---- 高程过滤 ----
+    z_min: 0.005                # 最低高程 (m, 过滤地面以下噪点)
+    z_max: 0.80                 # 最高高程 (m, >0.8m 是墙/障碍)
+
+    # ---- 性能 ----
+    publish_rate_hz: 5.0        # 发布频率 (Hz)
+    aggregation: "max"          # 每格聚合: "max" (最高点) 或 "mean" (平均)

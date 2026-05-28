@@ -1,136 +1,102 @@
-# 双目相机 → 2.5D 局部地形图 技术分析
+# D435i 深度相机 → 2.5D 局部地形图 技术分析
 
-> 状态：方案设计阶段，待用户确认后实施
-> 日期：2026-05-26
+> 状态：方案设计阶段，待确认 Q2-Q4 后编码
+> 日期：2026-05-28
 
 ---
 
 ## 一、总体目标
 
-从 Go2 前置双目相机实时生成机器人前方局部 2.5D 高程栅格图：
+从 **Intel RealSense D435i** 深度相机实时生成机器人前方局部 2.5D 高程栅格图：
 - **2D 栅格**（鸟瞰视角 BEV，x-y 平面）
-- **每格存储高度 z**（第 2.5 维，选 max/min/mean）
-- **供下游导航模块判断地形可通行性**
+- **每格存储高度 z**（第 2.5 维）
+- **供下游 `safety_supervisor` 判断地形可通行性**
+
+> D435i 自带片上 ASIC 完成立体匹配，直接输出深度图——**不需要手写 SGBM，管线极简。**
+
+### D435i 关键参数
+
+| 项目 | 值 |
+|:--|:--|
+| 基线 | 50mm |
+| 深度分辨率 | 848×480 (推荐) / 640×480 |
+| 深度 FOV | 87°×58° |
+| 有效深度 | 0.3m ~ 10m+ |
+| ROS2 驱动 | `ros-humble-realsense2-camera` (apt) |
 
 ---
 
 ## 二、管线设计
 
-### 2.1 完整数据流
+### 2.1 数据流（4 步）
 
 ```
-Go2 双目相机
-  ├── 左目图像 (sensor_msgs/Image)
-  └── 右目图像 (sensor_msgs/Image)
+Intel RealSense D435i
+  │
+  ├── /camera/depth/image_rect_raw   (16UC1, 单位 mm)
+  └── /camera/depth/camera_info      (内参 K, D, P)
            │
       ┌────▼─────┐
-      │ 1. 矫正   │  相机内参 K、畸变系数 D → cv2.undistort
-      │    (可选)  │  如果已矫正则跳过
+      │ 1. 深度   │  深度图 + 内参 → 3D 点云 (相机坐标系)
+      │  → 3D    │  Xc = Z * (u-cx)/fx
+      │           │  Yc = Z * (v-cy)/fy
+      │           │  Zc = Z (直接从深度图读)
       └────┬─────┘
            │
       ┌────▼─────┐
-      │ 2. 立体   │  cv2.StereoSGBM → 视差图 (disparity map)
-      │    匹配   │  参数: blockSize, numDisparities, P1/P2
+      │ 2. 坐标   │  相机坐标系 → 地面鸟瞰坐标
+      │    变换   │  Xg = Xc
+      │           │  Yg = Zc*cosθ - Yc*sinθ + H
+      │           │  Zg = -Zc*sinθ - Yc*cosθ
+      │           │  (H=相机高, θ=俯仰角)
       └────┬─────┘
            │
       ┌────▼─────┐
-      │ 3. 视差   │  Z = fB / d
-      │  → 深度   │  f=focal length, B=baseline, d=disparity
+      │ 3. 栅格   │  3D 点 → NumPy 2D grid
+      │    投影   │  grid[row][col] = max(Zg)
+      │           │  过滤: Z=0(无效)、Z>6m(太远)、Z<0.3m(腿)
       └────┬─────┘
            │
       ┌────▼─────┐
-      │ 4. 3D投影 │  像素(u,v,d) → 相机坐标(Xc,Yc,Zc)
-      │           │  Xc = (u - cx) * Z / fx
-      │           │  Yc = (v - cy) * Z / fy
-      └────┬─────┘
-           │
-      ┌────▼─────┐
-      │ 5. 坐标   │  相机 → 机器人本体坐标
-      │    变换   │  已知: 相机安装高度 H, 俯仰角 θ
-      │           │  Xr = Xc
-      │           │  Yr = Zc*cosθ - Yc*sinθ + H
-      │           │  Zr = -Zc*sinθ - Yc*cosθ
-      └────┬─────┘
-           │
-      ┌────▼─────┐
-      │ 6. 栅格   │  3D点 → NumPy 2D grid
-      │    投影   │  grid[col][row] = max(z) 或 mean(z)
-      │           │  过滤: Z 超出范围、梯度异常
-      └────┬─────┘
-           │
-      ┌────▼─────┐
-      │ 7. 发布   │  自定义消息 或 OccupancyGrid
-      │    输出   │
+      │ 4. 发布   │  ~/local_terrain 自定义消息
+      │    输出   │  供 safety_supervisor 消费
       └──────────┘
 ```
 
 ### 2.2 依赖库
 
-| 库 | 用途 | 大小 | 可替代 |
-|:--|:--|:--|:--|
-| `numpy` | 栅格矩阵运算 | ~20MB | 不可替 |
-| `opencv-python` (cv2) | 图像读取、SGBM 立体匹配 | ~50MB | ⚠️ 手写匹配器代码量大、效果差 |
-| `rclpy` | ROS2 节点 | 已安装 | 不可替 |
-| `cv_bridge` | ROS2 Image ↔ OpenCV Mat | 已安装 | 可手写但没必要 |
-
-> **没有 OpenCV 大库（opencv-contrib 200MB+），只用 opencv-python 基础版 ~50MB。** 如果连 cv2 都不想用，立体匹配可手写块匹配（SAD/NCC），但代码量 ×4、速度 ×0.3。
-
----
-
-## 三、关键参数及影响
-
-| 参数 | 推荐值 | 影响 |
+| 库 | 用途 | 大小 |
 |:--|:--|:--|
-| **栅格分辨率** | 0.05 m/格 | 精度 vs 计算量。0.10m 更轻量 |
-| **地图范围** | 前方 4m × 左右各 1.5m (3m 宽) | Go2 一步 ~0.3m，4m 是 ~13 步的前瞻 |
-| **视差搜索范围** | 64~128 | StereoSGBM numDisparities，影响有效深度范围 |
-| **块大小** | 9 | SGBM blockSize，奇数，大=平滑但细节少 |
-| **有效深度** | 0.5m ~ 6m | 太近(腿拍到)、太远(视差精度差)都过滤 |
-| **更新频率** | 3~5 Hz | 深度计算量大，不宜过高 |
-| **高度过滤** | z > 0.05m 视为障碍 | 过滤地面平面噪声 |
+| `numpy` | 栅格矩阵运算 | ~20MB |
+| `opencv-python` | 深度图读取 + 基本操作 | ~50MB |
+| `rclpy` | ROS2 节点 | 已安装 |
+| `cv_bridge` | Image ↔ Mat | 已安装 |
+| `ros-humble-realsense2-camera` | D435i 驱动 | Go2 预装 |
+
+> **无大仓库、无 SLAM、无手写立体匹配。仅用 4 个基础 Python 库。**
 
 ---
 
-## 四、待确认信息（需要你提供）
+## 三、关键参数
 
-### Q1: 双目相机参数
+| 参数 | 默认值 | 影响 |
+|:--|:--|:--|
+| 栅格分辨率 | 0.05m/格 | 精度 vs 计算量 |
+| 地图范围 | 前 4m × 宽 3m | Go2 一步 ~0.3m |
+| 有效深度 | 0.3m ~ 6m | 过滤无效和远处 |
+| 更新频率 | 5 Hz | 深度处理便宜 |
+| 高度判断 | z>0.03m=障碍 | 过滤地面噪声 |
 
-Go2 的前置双目相机是什么型号？在 Go2 SSH 里跑：
+---
 
-```bash
-# 方式1: 看话题
-ros2 topic list | grep -iE "camera|image|stereo|depth|rgb"
+## 四、待确认
 
-# 方式2: 如果话题已经有了，看相机信息
-ros2 topic info /camera/depth/image_rect_raw 2>/dev/null
-ros2 topic info /camera/infra1/image_rect_raw 2>/dev/null
-
-# 方式3: 看 /camera_info
-ros2 topic list | grep camera_info
-```
-
-**需要知道：**
-- 相机型号（D435i? T265? Go2 自带双目?）
-- 基线长度 B（Go2 自带 ≈ 20-25cm，D435i ≈ 5cm）
-- 分辨率（默认 640×480? 848×480?）
-- 是否已有标定话题 `/camera/.../camera_info`
-
-### Q2: 安装位置
-
-- 相机离地面高度？（Go2 机身顶端 ≈ 0.35m）
-- 俯仰角？（水平安装 ≈ 0°，向下倾斜 ≈ 15°）
-
-### Q3: 地图需求
-
-- 地图范围：前方 ×m？宽度 ×m？（推荐 4m×3m）
-- 输出格式：继续用 `safety_state.terrain_cost` 增强，还是独立话题？
-- 地图是连续更新还是帧帧替换？
-
-### Q4: 运行环境
-
-- 代码跑在 **Go2 机载 Jetson** 上还是**你电脑**上？
-  - 跑 Jetson：考虑算力（Jetson Orin NX ~70 TOPS 足够）
-  - 跑电脑：需传图像流过来，网络带宽 640×480×2 双目 ≈ 7 MB/s 可以接受
+| # | 问题 | 状态 |
+|:--:|:--|:--:|
+| Q1 | 相机型号 | ✅ D435i |
+| Q2 | 安装高度 H、俯仰角 θ | ❓ 待确认 |
+| Q3 | 地图范围、输出话题名 | ❓ 待确认 |
+| Q4 | 跑 Jetson 还是电脑 | ❓ 待确认 |
 
 ---
 
@@ -138,33 +104,51 @@ ros2 topic list | grep camera_info
 
 ```
 src/dog_nav_step56/dog_nav_step56/
-├── stereo_terrain_node.py     # 主节点：订阅双目 → 发布 2.5D 图
-└── stereo_utils.py            # 工具：栅格投影、过滤、高度提取
+├── stereo_terrain_node.py    # 主节点: 订阅深度 → 发布 2.5D 栅格
+└── grid_utils.py             # 工具: 3D投影、栅格化、滤波
 
 src/dog_nav_step56/config/
-└── stereo_terrain.yaml        # 参数：分辨率、范围、相机位姿
+└── stereo_terrain.yaml       # 参数: 分辨率、范围、相机位姿
 
 src/dog_nav_step56/launch/
-└── stereo_terrain.launch.py   # 独立启动（可配合 bridge 一起跑）
+└── stereo_terrain.launch.py  # 独立启动
 ```
 
 节点设计：
-- **输入:** `left_image`, `right_image`, `camera_info_left`, `camera_info_right`
-- **输出:** 自定义 `TerrainGrid` 消息（2D float32 数组 + metadata）或直接用 `OccupancyGrid`
-- **参数:** 分辨率、地图长宽、相机安装位姿、最小深度、块大小
+- **输入:** `/camera/depth/image_rect_raw`, `/camera/depth/camera_info`
+- **输出:** `/local_terrain` (sensor_msgs/Image 32FC1), `/terrain_cost` (std_msgs/Float32)
+- **参数:** 见 `config/stereo_terrain.yaml`，全量可调
 
 ---
 
-## 六、预期效果与限制
+## 六、参数速查（需要调时看这个）
 
-| 场景 | 预期效果 | 限制 |
-|:--|:--|:--|
-| 平坦地面 | 均匀高度，障碍标记干净 | 纹理弱可能视差噪声大 |
-| 台阶/路缘 | 高度突变清晰可见 | 高度 5mm 以下的台阶可能被滤除 |
-| 草地/碎石 | 平均高度变化平滑 | 细纹理视差噪声较多 |
-| 玻璃/反光 | 视差缺失区域 | 双目对此类材质天生受限 |
-| 暗光/夜晚 | 图像噪声大 | 双目需外部光源 |
+所有参数在 `config/stereo_terrain.yaml`，改完重启节点即可：
 
----
+| 参数 | 默认值 | 说明 | 调整建议 |
+|:--|:--|:--|:--|
+| `grid_resolution` | 0.05 | 栅格精度 m/格 | 降低→更快但粗糙 |
+| `grid_length_m` | 4.0 | 前方覆盖 m | 按需要调整 |
+| `grid_width_m` | 3.0 | 左右覆盖 m | ±1.5m |
+| `cam_height` | 0.35 | 相机离地 m | 实测后修正 |
+| `cam_pitch_deg` | 10.0 | 俯仰角 ° | 看不到地面→增大；看到腿→减小 |
+| `depth_min` | 0.3 | 最近深度 m | 拍到 Go2 腿→增大 |
+| `depth_max` | 6.0 | 最远深度 m | D435i 有效 ~10m，但 >6m 噪声大 |
+| `z_min` | 0.005 | 地面以下 m | 过滤噪声 |
+| `z_max` | 0.80 | 障碍高度 m | 可能太高→调小，看到太多点→调大 |
+| `publish_rate_hz` | 5.0 | 输出频率 | Jetson 跑这个轻松，10Hz 也没问题 |
+| `aggregation` | max | 每格取值 | max=最高点/mean=平均 |
 
-> **审查后回复：Q1-Q4 的答案，以及你对管线设计的意见。确认后开始写代码。**
+## 七、真机验证步骤
+
+```bash
+# 1. 确保 D435i 驱动在跑
+ros2 topic echo /camera/depth/image_rect_raw --once | head -1
+
+# 2. 启动地形节点
+ros2 launch dog_nav_step56 stereo_terrain.launch.py
+
+# 3. 看输出
+ros2 topic echo /terrain_cost         # 地形成本 (20=平, >100=有障碍)
+ros2 topic echo /local_terrain --once  # 高程栅格图
+```

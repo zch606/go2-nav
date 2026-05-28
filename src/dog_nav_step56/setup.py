@@ -14,11 +14,13 @@ setup(
             'launch/closed_loop_demo.launch.py',
             'launch/step56_test.launch.py',
             'launch/unitree_bridge.launch.py',
+            'launch/stereo_terrain.launch.py',
         ]),
         ('share/' + package_name + '/config', [
             'config/motion_adapter.yaml',
             'config/safety_supervisor.yaml',
             'config/unitree_bridge.yaml',
+            'config/stereo_terrain.yaml',
         ]),
     ],
     install_requires=['setuptools'],
@@ -35,6 +37,7 @@ setup(
             'simulated_input_node = dog_nav_step56.simulated_input_node:main',
             'test_trace_recorder_node = dog_nav_step56.test_trace_recorder_node:main',
             'unitree_bridge_node = dog_nav_step56.unitree_bridge_node:main',
+            'stereo_terrain_node = dog_nav_step56.stereo_terrain_node:main',
         ],
     },
 )
