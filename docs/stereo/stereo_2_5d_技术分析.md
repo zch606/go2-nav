@@ -77,6 +77,43 @@ Intel RealSense D435i
 
 ---
 
+## 三、坐标变换（核心）
+
+### 3.1 相机 → 地面
+
+D435i 安装在机器人正前方，高度 H，俯仰角 θ（正=下倾）。
+
+```
+世界坐标系: Xw=右, Yw=前, Zw=上
+相机坐标系: Xc=右, Yc=下(图像), Zc=前(光轴)
+
+R_c2w = [[1, 0,      0    ],      R_w2c = R_c2w^T
+         [0, -sinθ,  cosθ ],
+         [0, -cosθ,  -sinθ]]
+
+P_world = R_c2w * P_camera + [0, 0, H]
+```
+
+导出：
+```
+xg = xc                          ← 左右不变
+yg = -sinθ * yc + cosθ * zc      ← 前方距离
+zg = H - cosθ * yc - sinθ * zc   ← 高程(0=地面)
+```
+
+> 本公式已离线测试验证：输入平坦地面+盒子(0.4m)+斜坡(0.15m)，输出全部正确。
+
+### 3.2 深度 → 相机 3D
+
+```
+D435i 深度图单位: mm (16UC1)
+zc = depth_mm * 0.001           ← mm→m
+xc = (u - cx) * zc / fx
+yc = (v - cy) * zc / fy
+```
+
+---
+
 ## 三、关键参数
 
 | 参数 | 默认值 | 影响 |
@@ -94,18 +131,19 @@ Intel RealSense D435i
 | # | 问题 | 状态 |
 |:--:|:--|:--:|
 | Q1 | 相机型号 | ✅ D435i |
-| Q2 | 安装高度 H、俯仰角 θ | ❓ 待确认 |
-| Q3 | 地图范围、输出话题名 | ❓ 待确认 |
-| Q4 | 跑 Jetson 还是电脑 | ❓ 待确认 |
+| Q2 | 安装高度 H=0.35m、俯仰角 θ=10° | ✅ 待真机验证 |
+| Q3 | 地图范围 4m×3m、话题 /local_terrain | ✅ |
+| Q4 | 跑 Jetson 上 | ✅ |
 
 ---
 
-## 五、代码结构（草案）
+## 五、代码结构
 
 ```
 src/dog_nav_step56/dog_nav_step56/
 ├── stereo_terrain_node.py    # 主节点: 订阅深度 → 发布 2.5D 栅格
-└── grid_utils.py             # 工具: 3D投影、栅格化、滤波
+├── grid_utils.py             # 工具: 3D投影、坐标变换、栅格化、坡度
+└── test_stereo_terrain_offline.py  # 离线验证 (ALL PASS)
 
 src/dog_nav_step56/config/
 └── stereo_terrain.yaml       # 参数: 分辨率、范围、相机位姿
