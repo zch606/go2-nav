@@ -17,12 +17,14 @@ class SimulatedInputNode(Node):
         self.declare_parameter('terrain_cost_topic', '/terrain_cost')
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('scenario', 'curved_normal')
+        self.declare_parameter('publish_terrain', True)
 
         self._path_topic = self.get_parameter('path_topic').value
         self._odom_topic = self.get_parameter('odom_topic').value
         self._imu_topic = self.get_parameter('imu_topic').value
         self._terrain_cost_topic = self.get_parameter('terrain_cost_topic').value
         self._publish_rate_hz = float(self.get_parameter('publish_rate_hz').value)
+        self._publish_terrain = self.get_parameter('publish_terrain').value
 
         # 加载场景
         scenario_name = self.get_parameter('scenario').value
@@ -61,9 +63,10 @@ class SimulatedInputNode(Node):
         self._odom_pub.publish(self._scenario.build_odom(self._time, stamp))
         self._imu_pub.publish(self._scenario.build_imu(self._time, stamp))
 
-        terrain = Float32()
-        terrain.data = float(self._scenario.terrain_cost(self._time))
-        self._terrain_pub.publish(terrain)
+        if self._publish_terrain:
+            terrain = Float32()
+            terrain.data = float(self._scenario.terrain_cost(self._time))
+            self._terrain_pub.publish(terrain)
 
 
 def main(args: list[str] | None = None) -> None:
