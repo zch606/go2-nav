@@ -41,113 +41,38 @@
 
 ### 2.1 环境要求
 
-**VM (Ubuntu 22.04):**
 ```bash
-# ROS2 Humble + 基础依赖（一次性）
-sudo apt install -y ros-humble-ros-base python3-colcon-common-extensions python3-pip
-pip3 install numpy pyyaml opencv-python
+# Go2 Jetson 上
+sudo apt install -y ros-humble-realsense2-camera   # D435i 驱动
+pip3 install numpy opencv-python                     # 已有
 
-# 编译项目
-cd ~/Daohang
+# 编译
+cd ~/go2-nav
 source /opt/ros/humble/setup.bash
 source src/unitree_ros2/cyclonedds_ws/install/setup.bash
-colcon build --packages-select dog_nav_interfaces dog_nav_step56
-```
-
-**Go2 Jetson:**
-```bash
-# D435i 驱动（一次性）
-sudo apt install -y ros-humble-realsense2-camera
-pip3 install numpy opencv-python
-```
-
-### 2.2 真机 vs 仿真区别
-
-| | 仿真模式 | 真机模式 |
-|:--|:--|:--|
-| 启动参数 | `scenario:=xxx` | `use_bridge:=true scenario:=xxx` |
-| 里程计 | 公式推的假数据 | Go2 真实轮速/IMU |
-| 路径 | 场景预设路点 | 规划器真实路径 |
-| 地形成本 | YAML 里写死的值 | D435i 深度图实时算 |
-| 指令发给 Go2 | ❌ 不发 | ✅ 通过 DDS 发 |
-| Go2 会动吗 | ❌ 不会 | ✅ 会 |
-
-### 2.3 真机全流程（从零开始）
-
-**前置：网线连接**
-
-```
-电脑以太网口 ←── 网线 ──→ Go2 背部网口
-```
-
-Windows 设静态 IP：
-```
-IP: 192.168.123.99, 掩码: 255.255.255.0, 网关: 留空
-```
-
-**VMware 网卡：** VM 关机 → 设置 → 添加网络适配器 → 桥接模式 → 桥接到有线网卡。
-
-**第 1 步：VM 设网口 + DDS（每次开机一次）**
-
-```bash
-sudo ip addr add 192.168.123.100/24 dev ens38
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface address="192.168.123.100"/></Interfaces></General></Domain></CycloneDDS>'
-ping 192.168.123.18   # 确认物理连通
-```
-
-**第 2 步：传代码 + 编译**
-
-```bash
-# Windows CMD（每次改代码后）：
-scp -r "d:\Daohang\src\dog_nav_step56" viego@192.168.123.100:~/Daohang/src/
-
-# VM 里编译：
-cd ~/Daohang
-source /opt/ros/humble/setup.bash
-source src/unitree_ros2/cyclonedds_ws/install/setup.bash
-colcon build --packages-select dog_nav_step56
+colcon build --packages-select dog_nav_step56 dog_nav_interfaces
 source install/setup.bash
 ```
 
-**第 3 步：验证 Go2 就绪**
+### 2.2 真机启动顺序
 
 ```bash
-# Go2 SSH:
-ros2 topic list | grep sport    # 需看到 /lf/sportmodestate
-```
-
-**第 4 步：验证 D435i 深度图（可选，仅测地形）**
-
-```bash
-# Go2 SSH:
+# 1. 确保 D435i 驱动正常
 ros2 topic echo /camera/depth/image_rect_raw --once | head -1
-# 没输出 → sudo apt install ros-humble-realsense2-camera
 
-# VM:
+# 2. 启动 2.5D 地形感知
 ros2 launch dog_nav_step56 stereo_terrain.launch.py
-ros2 topic echo /terrain_cost    # 20=平坦, >100=有障碍
+
+# 3. 验证输出
+ros2 topic echo /terrain_cost       # 20~170, 越高越危险
+ros2 topic echo /local_terrain --once  # 高程栅格
+
+# 4. 合体启动（桥接 + 导航 + 地形）
+ros2 launch dog_nav_step56 closed_loop_demo.launch.py \
+    use_bridge:=true scenario:=test_forward
 ```
 
-**第 5 步：启动真机导航（遥控器放手边！）**
-
-```bash
-# VM:
-export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-export CYCLONEDDS_URI='<CycloneDDS><Domain><General><Interfaces><NetworkInterface address="192.168.123.100"/></Interfaces></General></Domain></CycloneDDS>'
-
-# 先跑最安全的 test_forward（纯直行 5m）
-ros2 launch dog_nav_step56 closed_loop_demo.launch.py use_bridge:=true scenario:=test_forward
-
-# 其他场景:
-# curved_normal    — 蛇形巡航
-# zigzag_with_tilt — Z字折返+倾斜
-# round_trip       — 直行往返+坐下
-```
-
-**安全：遥控器始终在手，异常立刻拍急停。**
-
-### 2.4 参数调优
+### 2.3 参数调优
 
 `config/stereo_terrain.yaml` 中两个参数最可能需要调：
 
