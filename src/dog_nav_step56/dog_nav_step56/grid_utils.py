@@ -71,32 +71,33 @@ def points_to_grid(xg: np.ndarray, yg: np.ndarray, zg: np.ndarray,
     """
     3D 点云 → 2.5D 高程栅格。
 
-    栅格坐标: row=y方向(前方), col=x方向(左右)
+    栅格坐标: row=前方(yg), col=左右(xg)
+    depth_min/max 过滤 yg (前方距离)，不用 zc (下倾相机 zc≈0)。
 
     Args:
-        xg, yg, zg:  地面坐标系 3D 点 (m)
-        zc:          原始深度值 (m), 用于过滤
+        xg, yg, zg:  地面坐标系: xg=左右, yg=前方, zg=高程 (m)
+        zc:          原始相机深度 (m), 仅日志参考，不做过滤
         grid_res:    栅格分辨率 (m/格)
         grid_w:      栅格宽度 (格数, 左右方向)
         grid_h:      栅格高度 (格数, 前后方向)
-        z_min:       最小高程 (m), 低于此值过滤
-        z_max:       最大高程 (m), 高于此值过滤
-        depth_min:   最小深度过滤 (m)
-        depth_max:   最大深度过滤 (m)
+        z_min:       最小高程 (m)
+        z_max:       最大高程 (m)
+        depth_min:   最小前方距离 (m)
+        depth_max:   最大前方距离 (m)
         aggregation: 'max' 或 'mean'
 
     Returns:
-        grid: (grid_h × grid_w), 无效格 = NaN
+        grid: (grid_h × grid_w), -inf = 无效
     """
     half_w = grid_w // 2
 
-    col = (yg / grid_res + half_w).astype(np.int32)
-    row = (xg / grid_res).astype(np.int32)
+    col = (xg / grid_res + half_w).astype(np.int32)
+    row = (yg / grid_res).astype(np.int32)
 
     valid = (
         (col >= 0) & (col < grid_w) &
         (row >= 0) & (row < grid_h) &
-        (zc > depth_min) & (zc < depth_max) &
+        (yg > depth_min) & (yg < depth_max) &     # 用地面前方距离过滤
         (zg > z_min) & (zg < z_max)
     )
 

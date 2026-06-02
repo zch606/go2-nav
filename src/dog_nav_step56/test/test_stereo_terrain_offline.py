@@ -11,40 +11,31 @@ import numpy as np
 CAM_H = 0.35
 CAM_PITCH = math.radians(10.0)
 GRID_RES = 0.05
-GRID_LEN = 5.0   # 延长到 5m 覆盖 D435i 在 10°下倾的可见范围
+GRID_LEN = 5.0
 GRID_WID = 3.0
-DEPTH_MIN = 0.0  # 测试放宽（真机设 0.3 过滤 Go2 腿）
+DEPTH_MIN = 0.0
 DEPTH_MAX = 6.0
-Z_MIN = -0.02  # 允许零地面 (D435i 高程精度 ~2cm)
+Z_MIN = -0.02
 Z_MAX = 0.80
 FX, FY, CX, CY = 424.0, 424.0, 424.0, 240.0
 
 
 def make_ground_3d() -> (np.ndarray, np.ndarray, np.ndarray, np.ndarray):
-    """
-    生成模拟地面 3D 点云 (相机坐标系) + 障碍物。
+    """生成模拟地面 3D 点云 (相机坐标系) + 障碍物."""
 
-    模拟场景: 平坦地面, 前方 0.5~5m, 宽 ±1.5m
-    中间放一个 0.4m 高盒子, 左边放一个 0.15m 高斜坡。
-    """
-    # 地面网格采样（2~5m 可见范围）
     xx, yy = np.meshgrid(
         np.linspace(-1.5, 1.5, 60),
-        np.linspace(2.0, 5.0, 60),  # D435i 10°下倾可见范围
+        np.linspace(2.0, 5.0, 60),
     )
     zz = np.full_like(xx, 0.0)
 
-    # 盒子: x∈[-0.2,0.2], y∈[2.5,3.5], 高 0.4m
     box_mask = (np.abs(xx) < 0.2) & (yy > 2.5) & (yy < 3.5)
     zz[box_mask] = 0.4
 
-    # 斜坡: x∈[-1.0,-0.4], y∈[3.0,5.0], 从 0 升到 0.15m
     ramp_mask = (xx < -0.4) & (xx > -1.0) & (yy > 3.0) & (yy < 5.0)
     ramp_frac = (yy[ramp_mask] - 3.0) / 2.0
     zz[ramp_mask] = ramp_frac * 0.15
 
-    # 世界坐标 → 相机坐标 (R_w2c * (Pw - t))
-    # R_w2c = [[1,0,0],[0,-sin,-cos],[0,cos,-sin]]
     cos_t, sin_t = math.cos(CAM_PITCH), math.sin(CAM_PITCH)
     xc = xx
     yc = -sin_t * yy - cos_t * (zz - CAM_H)
@@ -64,12 +55,11 @@ def main() -> None:
     print(f"\n[1] 3D points: {n}, Zc={zc.min():.2f}~{zc.max():.2f}m, "
           f"Z_true={z_true.min():.2f}~{z_true.max():.2f}m")
 
-    # 2. 相机 → 地面坐标 (R_c2w * Pc + t)
-    # R_c2w = [[1,0,0],[0,-sin,cos],[0,-cos,-sin]]
+    # 2. 相机 → 地面坐标
     cos_t, sin_t = math.cos(CAM_PITCH), math.sin(CAM_PITCH)
     xg = xc
-    yg = -sin_t * yc + cos_t * zc              # 前方距离
-    zg = CAM_H - cos_t * yc - sin_t * zc        # 高程
+    yg = -sin_t * yc + cos_t * zc
+    zg = CAM_H - cos_t * yc - sin_t * zc
 
     valid_calib = zc > 0
     print(f"[2] Ground: Yg={yg[valid_calib].min():.2f}~{yg[valid_calib].max():.2f}m, "
@@ -85,7 +75,7 @@ def main() -> None:
     valid = valid_calib & \
         (col >= 0) & (col < gw) & \
         (row >= 0) & (row < gh) & \
-        (zc > DEPTH_MIN) & (zc < DEPTH_MAX) & \
+        (yg > DEPTH_MIN) & (yg < DEPTH_MAX) & \
         (zg > Z_MIN) & (zg < Z_MAX)
 
     grid = np.full((gh, gw), -np.inf, dtype=np.float32)
@@ -102,7 +92,6 @@ def main() -> None:
     dy /= GRID_RES
     dx /= GRID_RES
     slope = np.arctan(np.sqrt(dy ** 2 + dx ** 2))
-    mask_nan = np.isnan(grid)
     valid_slope = slope[np.isfinite(grid)]
     cost = float(np.tanh(np.nanmean(valid_slope) * 20) * 150 + 20)
     print(f"[4] Avg slope={np.nanmean(slope):.4f}rad "
@@ -130,10 +119,10 @@ def main() -> None:
     # 7. 结论
     print("\n" + "=" * 60)
     checks = [
-        n_grid > 500,         # 大部分地面被覆盖
-        obs > 10,             # 检测到盒子障碍物
-        ramp > 5,             # 检测到斜坡
-        30 < cost < 160,      # 成本在合理范围
+        n_grid > 500,
+        obs > 10,
+        ramp > 5,
+        30 < cost < 160,
     ]
     if all(checks):
         print("  ALL PASS: pipeline fully functional")
